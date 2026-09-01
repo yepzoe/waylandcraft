@@ -1,247 +1,171 @@
 package dev.evvie.waylandcraft.render;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.OptionalInt;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
-import org.joml.Matrix4fc;
-
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.buffers.Std140Builder;
-import com.mojang.blaze3d.buffers.Std140SizeCalculator;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.pipeline.TextureTarget;
-import com.mojang.blaze3d.platform.DestFactor;
-import com.mojang.blaze3d.platform.SourceFactor;
-import com.mojang.blaze3d.shaders.UniformType;
-import com.mojang.blaze3d.systems.RenderPass;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuTextureView;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import org.joml.Matrix4f;
+import org.lwjgl.opengl.GL33;
 
 import dev.evvie.waylandcraft.WaylandCraftCommon;
 import dev.evvie.waylandcraft.bridge.WLCSurface;
-import dev.evvie.waylandcraft.bridge.WLCSurface.SurfaceDamage;
 import dev.evvie.waylandcraft.bridge.WLCSurface.ViewportSource;
 import dev.evvie.waylandcraft.displays.FramebufferRenderable;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.DynamicUniformStorage;
-import net.minecraft.client.renderer.DynamicUniformStorage.DynamicUniform;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.texture.AbstractTexture;
-import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
-import net.minecraft.client.renderer.texture.TextureManager;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 public class WindowFramebuffer implements FramebufferRenderable {
-	
-	public static final RenderPipeline WINDOW_PIPELINE = RenderPipelines.register(
-		RenderPipeline.builder()
-		.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window"))
-		.withVertexShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "window"))
-		.withFragmentShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "window"))
-		.withVertexFormat(DefaultVertexFormat.POSITION_TEX, VertexFormat.Mode.QUADS)
-		.withSampler("sampler")
-		.withUniform("window_info", UniformType.UNIFORM_BUFFER)
-		.withColorTargetState(new ColorTargetState(new BlendFunction(SourceFactor.ONE, DestFactor.ONE_MINUS_SRC_ALPHA)))
-		.withCull(false)
-		.build()
-	);
-	
-	public static final RenderPipeline UNPREMULTIPLY_PIPELINE = RenderPipelines.register(
-		RenderPipeline.builder()
-		.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/unpremultiply"))
-		.withVertexShader("core/screenquad")
-		.withFragmentShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "unpremultiply"))
-		.withVertexFormat(DefaultVertexFormat.EMPTY, VertexFormat.Mode.TRIANGLES)
-		.withColorTargetState(ColorTargetState.DEFAULT)
-		.withSampler("sampler")
-		.build()
-	);
-	
-	public static final RenderPipeline DAMAGE_PIPELINE = RenderPipelines.register(
-		RenderPipeline.builder()
-		.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/damage"))
-		.withVertexShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "window"))
-		.withFragmentShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "window_damage"))
-		.withVertexFormat(DefaultVertexFormat.POSITION_TEX, VertexFormat.Mode.QUADS)
-		.withUniform("window_info", UniformType.UNIFORM_BUFFER)
-		.withColorTargetState(new ColorTargetState(new BlendFunction(SourceFactor.ONE, DestFactor.ONE_MINUS_SRC_ALPHA)))
-		.withCull(false)
-		.build()
-	);
-	
-	private static DynamicUniformStorage<WindowInfoUniform> uniformStorage = null;
-	private static boolean debugDamage = false;
-	
+
+	private static int SHADER = -1;
+	private static int SHADER_OPAQUE = -1;
+	private static boolean shadersCompiled = false;
+
+	private static ResourceLocation SHADER_FRAG_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window.fsh");
+	private static ResourceLocation SHADER_FRAG_OPAQUE_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window_opaque.fsh");
+	private static ResourceLocation SHADER_VERT_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window.vsh");
+
 	public final WLCSurface surfaceTree;
-	private TextureTarget tempTarget = null;
-	private TextureTarget target = null;
-	private FramebufferTexture texture = null;
-	private Identifier location = null;
-	
-	private int width = 0;
-	private int height = 0;
-	private int xoff;
-	private int yoff;
-	
+
+	private int tex;
+
+	private int width = -1;
+	private int height = -1;
+	private int xoff = -1;
+	private int yoff = -1;
+
 	public WindowFramebuffer(WLCSurface surfaceTree) {
 		this.surfaceTree = surfaceTree;
 	}
-	
-	public static void endFrame() {
-		if(uniformStorage != null) uniformStorage.endFrame();
+
+	public static WindowFramebuffer renderSurfaceTree(WLCSurface surfaceTree) {
+		WindowFramebuffer buf = new WindowFramebuffer(surfaceTree);
+		buf.init();
+		return buf;
 	}
-	
-	private static void ensureUniformStorage() {
-		if(uniformStorage == null) {
-			uniformStorage = new DynamicUniformStorage<WindowInfoUniform>("window framebuffer", WindowInfoUniform.SIZE, 2);
-		}
+
+	private void init() {
+		ensureShadersCompiled();
+		updateDimensions();
+		render();
 	}
-	
-	private void updateTarget() {
+
+	private void updateDimensions() {
 		int minX = 0;
 		int minY = 0;
 		int maxX = 0;
 		int maxY = 0;
-		
+
 		for(WLCSurface surface = surfaceTree; surface != null; surface = surface.getNextChild()) {
 			int sMinX = surface.xSubpos;
 			int sMinY = surface.ySubpos;
 			int sMaxX = sMinX + surface.width();
 			int sMaxY = sMinY + surface.height();
-			
+
 			if(sMinX < minX) minX = sMinX;
 			if(sMinY < minY) minY = sMinY;
 			if(sMaxX > maxX) maxX = sMaxX;
 			if(sMaxY > maxY) maxY = sMaxY;
 		}
-		
-		int prevWidth = width;
-		int prevHeight = height;
-		
+
 		this.xoff = -minX;
 		this.yoff = -minY;
 		this.width = maxX - minX;
 		this.height = maxY - minY;
-		
-		if(width <= 0 || height <= 0) {
-			destroy();
-			return;
-		}
-		
-		if(width != prevWidth || height != prevHeight) destroy();
-		
-		if(tempTarget == null) {
-			tempTarget = new TextureTarget(name() + "-temp", width, height, false);
-		}
-		
-		if(target == null) {
-			target = new TextureTarget(name(), width, height, false);
-		}
-		
-		if(texture == null) registerTexture();
 	}
-	
-	private String name() {
-		return "wayland-framebuffer-" + this.hashCode() + "-" + surfaceTree.hashCode();
-	}
-	
+
 	public void render() {
-		updateTarget();
-		if(target == null || tempTarget == null) return;
-		
-		PoseStack poseStack = new PoseStack();
-		poseStack.translate(-1.0, -1.0, 0.0);
-		poseStack.scale(2.0f / width, 2.0f / height, 1.0f);
-		
-		ArrayList<CompiledBufferDraw> elements = new ArrayList<>();
-		for(WLCSurface surface = surfaceTree; surface != null; surface = surface.getNextChild()) {
-			BufferDraw draw = bakeSurface(surface, xoff + surface.xSubpos, yoff + surface.ySubpos);
-			if(draw != null) elements.add(draw.compile());
+		ensureShadersCompiled();
+		updateDimensions();
+		if (tex > 0) {
+			GL33.glDeleteTextures(tex);
+			tex = 0;
 		}
-		
-		ensureUniformStorage();
-		GpuBufferSlice alphaUniforms = uniformStorage.writeUniform(new WindowInfoUniform(poseStack.last().pose(), true));
-		GpuBufferSlice opaqueUniforms = uniformStorage.writeUniform(new WindowInfoUniform(poseStack.last().pose(), false));
-		
-		try {
-			try(RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "window framebuffer", tempTarget.getColorTextureView(), OptionalInt.of(0x00000000))) {
-				pass.setPipeline(WINDOW_PIPELINE);
-				for(CompiledBufferDraw element : elements) {
-					pass.setUniform("window_info", element.alpha ? alphaUniforms : opaqueUniforms);
-					pass.bindTexture("sampler", element.textureView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
-					pass.setVertexBuffer(0, element.vertexBuffer);
-					pass.setIndexBuffer(element.indexBuffer, element.indexType);
-					pass.drawIndexed(0, 0, element.indexCount, 1);
-				}
-			}
+		if (width <= 0 || height <= 0) return;
+		tex = GL33.glGenTextures();
+		GL33.glBindTexture(GL33.GL_TEXTURE_2D, tex);
+		GL33.nglTexImage2D(GL33.GL_TEXTURE_2D, 0, GL33.GL_RGBA, width, height, 0, GL33.GL_RGBA, GL33.GL_UNSIGNED_BYTE, 0);
+		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MIN_FILTER, GL33.GL_LINEAR);
+		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MAG_FILTER, GL33.GL_NEAREST);
+		GL33.glBindTexture(GL33.GL_TEXTURE_2D, 0);
+
+		if(width == 0 || height == 0) return;
+
+		int fbo = GL33.glGenFramebuffers();
+		GL33.glBindFramebuffer(GL33.GL_FRAMEBUFFER, fbo);
+		GL33.glFramebufferTexture2D(GL33.GL_FRAMEBUFFER, GL33.GL_COLOR_ATTACHMENT0, GL33.GL_TEXTURE_2D, tex, 0);
+
+		int depth_stencil_rbo = GL33.glGenRenderbuffers();
+		GL33.glBindRenderbuffer(GL33.GL_RENDERBUFFER, depth_stencil_rbo);
+		GL33.glRenderbufferStorage(GL33.GL_RENDERBUFFER, GL33.GL_DEPTH24_STENCIL8, width, height);
+		GL33.glBindRenderbuffer(GL33.GL_RENDERBUFFER, 0);
+
+		GL33.glFramebufferRenderbuffer(GL33.GL_FRAMEBUFFER, GL33.GL_DEPTH_STENCIL_ATTACHMENT, GL33.GL_RENDERBUFFER, depth_stencil_rbo);
+
+		if(GL33.glCheckFramebufferStatus(GL33.GL_FRAMEBUFFER) != GL33.GL_FRAMEBUFFER_COMPLETE) {
+			WaylandCraftCommon.LOGGER.error("Failed to create framebuffer!");
 		}
-		finally {
-			for(CompiledBufferDraw element : elements) {
-				element.vertexBuffer.close();
-			}
-		}
-		
-		if(debugDamage) drawDebugDamage(opaqueUniforms);
-		
-		try(RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "window framebuffer unpremultiply", target.getColorTextureView(), OptionalInt.empty())) {
-			pass.setPipeline(UNPREMULTIPLY_PIPELINE);
-			pass.bindTexture("sampler", tempTarget.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
-			pass.draw(0, 3);
-		}
+
+		int vaoRestore = GL33.glGetInteger(GL33.GL_VERTEX_ARRAY_BINDING);
+
+		drawSurfaces();
+
+		GL33.glBindVertexArray(vaoRestore);
+		Minecraft.getInstance().getMainRenderTarget().bindWrite(true);
+
+		GL33.glDeleteRenderbuffers(depth_stencil_rbo);
+		GL33.glDeleteFramebuffers(fbo);
 	}
-	
-	private void drawDebugDamage(GpuBufferSlice opaqueUniforms) {
-		ArrayList<CompiledBufferDraw> damageElements = new ArrayList<>();
+
+	private void drawSurfaces() {
+		GL33.glViewport(0, 0, width, height);
+		GL33.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		GL33.glClear(GL33.GL_COLOR_BUFFER_BIT | GL33.GL_DEPTH_BUFFER_BIT);
+
+		GL33.glEnable(GL33.GL_DEPTH_TEST);
+		GL33.glDepthFunc(GL33.GL_ALWAYS);
+
+		int blendSrcAlphaRestore = GL33.glGetInteger(GL33.GL_BLEND_SRC);
+		int blendDstAlphaRestore = GL33.glGetInteger(GL33.GL_BLEND_DST);
+		boolean blendRestore = GL33.glIsEnabled(GL33.GL_BLEND);
+
+		GL33.glEnable(GL33.GL_BLEND);
+		GL33.glBlendFunc(GL33.GL_ONE, GL33.GL_ONE_MINUS_SRC_ALPHA);
+
+		int vao = GL33.glGenVertexArrays();
+		GL33.glBindVertexArray(vao);
+
 		for(WLCSurface surface = surfaceTree; surface != null; surface = surface.getNextChild()) {
-			int sx = xoff + surface.xSubpos;
-			int sy = yoff + surface.ySubpos;
-			
-			for(SurfaceDamage damage : surface.getDamage()) {
-				damageElements.add(new BufferDraw(null, sx + damage.x(), sy + damage.y(), damage.width(), damage.height(), 0, 0, 0, 0, false).compile());
-			}
+			renderSurface(surface, xoff + surface.xSubpos, yoff + surface.ySubpos);
 		}
-		
-		try {
-			try(RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "window framebuffer damage", tempTarget.getColorTextureView(), OptionalInt.empty())) {
-				pass.setPipeline(DAMAGE_PIPELINE);
-				pass.setUniform("window_info", opaqueUniforms);
-				for(CompiledBufferDraw element : damageElements) {
-					pass.setVertexBuffer(0, element.vertexBuffer);
-					pass.setIndexBuffer(element.indexBuffer, element.indexType);
-					pass.drawIndexed(0, 0, element.indexCount, 1);
-				}
-			}
-		}
-		finally {
-			for(CompiledBufferDraw element : damageElements) {
-				element.vertexBuffer.close();
-			}
-		}
+
+		GL33.glDeleteVertexArrays(vao);
+
+		if(!blendRestore) GL33.glDisable(GL33.GL_BLEND);
+		GL33.glBlendFunc(blendSrcAlphaRestore, blendDstAlphaRestore);
+		GL33.glDepthFunc(GL33.GL_LEQUAL);
 	}
-	
-	private BufferDraw bakeSurface(WLCSurface surface, float x, float y) {
+
+	public void freeTexture() {
+		GL33.glDeleteTextures(tex);
+		tex = 0;
+	}
+
+	public void destroy() {
+		freeTexture();
+	}
+
+	private void renderSurface(WLCSurface surface, float x, float y) {
 		BufferTexture buf = surface.getBuffer();
-		if(buf == null) return null;
-		
+		if(buf == null) return;
+
 		float w = surface.width();
 		float h = surface.height();
-		
+
 		float crop_x1 = 0.0f;
 		float crop_y1 = 0.0f;
 		float crop_x2 = 1.0f;
 		float crop_y2 = 1.0f;
-		
+
 		ViewportSource src = surface.getViewportSource();
 		if(src != null) {
 			crop_x1 = (float) (src.x() / buf.width);
@@ -249,115 +173,164 @@ public class WindowFramebuffer implements FramebufferRenderable {
 			crop_x2 = (float) ((src.x() + src.width()) / buf.width);
 			crop_y2 = (float) ((src.y() + src.height()) / buf.height);
 		}
-		
-		return new BufferDraw(buf.getTextureView(), x, y, w, h, crop_x1, crop_y1, crop_x2, crop_y2, buf.format != BufferTexture.FORMAT_XRGB8888);
+
+		renderBuffer(buf, x, y, w, h, crop_x1, crop_y1, crop_x2, crop_y2);
 	}
-	
-	private static record CompiledBufferDraw(GpuTextureView textureView, GpuBuffer vertexBuffer, GpuBuffer indexBuffer, int indexCount, VertexFormat.IndexType indexType, boolean alpha) {
+
+	private void renderBuffer(BufferTexture buf, float x, float y, float w, float h, float u1, float v1, float u2, float v2) {
+		float[] data = new float[] {
+				x,     y,     u1, v1,
+				x + w, y    , u2, v1,
+				x + w, y + h, u2, v2,
+
+				x + w, y + h, u2, v2,
+				x    , y + h, u1, v2,
+				x    , y    , u1, v1,
+		};
+
+		Matrix4f mat = new Matrix4f().translate(-1.0f, -1.0f, 0.0f).scale(2.0f / width, 2.0f / height, 1.0f);
+
+		int vbo = GL33.glGenBuffers();
+		GL33.glBindBuffer(GL33.GL_ARRAY_BUFFER, vbo);
+		GL33.glBufferData(GL33.GL_ARRAY_BUFFER, data, GL33.GL_STATIC_DRAW);
+
+		GL33.glEnableVertexAttribArray(0);
+		GL33.glEnableVertexAttribArray(1);
+		GL33.nglVertexAttribPointer(0, 2, GL33.GL_FLOAT, false, 4 * Float.BYTES, 0);
+		GL33.nglVertexAttribPointer(1, 2, GL33.GL_FLOAT, false, 4 * Float.BYTES, 2 * Float.BYTES);
+
+		int shader = buf.format == BufferTexture.FORMAT_XRGB8888 ? SHADER_OPAQUE : SHADER;
+
+		// Note: Both shaders use same uniforms
+
+		GL33.glUseProgram(shader);
+		GL33.glUniformMatrix4fv(GL33.glGetUniformLocation(shader, "transform"), false, mat.get(new float[16]));
+
+		GL33.glActiveTexture(GL33.GL_TEXTURE1);
+		GL33.glBindTexture(GL33.GL_TEXTURE_2D, buf.id);
+		GL33.glUniform1i(GL33.glGetUniformLocation(shader, "tex"), 1);
+		GL33.glActiveTexture(GL33.GL_TEXTURE0);
+
+		GL33.glDrawArrays(GL33.GL_TRIANGLES, 0, 6);
+
+		GL33.glDisableVertexAttribArray(0);
+		GL33.glDisableVertexAttribArray(1);
+		GL33.glDeleteBuffers(vbo);
 	}
-	
-	private static record BufferDraw(GpuTextureView textureView, float x, float y, float w, float h, float u1, float v1, float u2, float v2, boolean alpha) {
-		
-		public CompiledBufferDraw compile() {
-			try(ByteBufferBuilder byteBuilder = new ByteBufferBuilder(DefaultVertexFormat.POSITION_TEX.getVertexSize() * 4)) {
-				BufferBuilder builder = new BufferBuilder(byteBuilder, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-				builder.addVertex(x, y, 0).setUv(u1, v1);
-				builder.addVertex(x + w, y, 0).setUv(u2, v1);
-				builder.addVertex(x + w, y + h, 0).setUv(u2, v2);
-				builder.addVertex(x, y + h, 0).setUv(u1, v2);
-				
-				try(MeshData mesh = builder.buildOrThrow()) {
-					int indexCount = mesh.drawState().indexCount();
-					RenderSystem.AutoStorageIndexBuffer indices = RenderSystem.getSequentialBuffer(VertexFormat.Mode.QUADS);
-					GpuBuffer vertexBuffer = RenderSystem.getDevice().createBuffer(null, GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_COPY_DST, mesh.vertexBuffer());
-					GpuBuffer indexBuffer = indices.getBuffer(indexCount);
-					return new CompiledBufferDraw(textureView, vertexBuffer, indexBuffer, indexCount, indices.type(), alpha);
-				}
-			}
-		}
-		
-	}
-	
-	private void registerTexture() {
-		if(target == null) return;
-		
-		texture = new FramebufferTexture(getTextureView());
-		location = Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, name());
-		
-		Minecraft.getInstance().getTextureManager().register(location, texture);
-	}
-	
-	private void unregisterTexture() {
-		TextureManager manager = Minecraft.getInstance().getTextureManager();
-		manager.register(location, manager.getTexture(MissingTextureAtlasSprite.getLocation()));
-		texture = null;
-		location = null;
-	}
-	
-	public void destroy() {
-		if(target != null) target.destroyBuffers();
-		if(tempTarget != null) tempTarget.destroyBuffers();
-		if(texture != null) unregisterTexture();
-		target = null;
-		tempTarget = null;
-	}
-	
+
 	@Override
 	public int getWidth() {
 		return width;
 	}
-	
+
 	@Override
 	public int getHeight() {
 		return height;
 	}
-	
+
 	@Override
 	public int getXOff() {
 		return xoff;
 	}
-	
+
 	@Override
 	public int getYOff() {
 		return yoff;
 	}
-	
-	public GpuTextureView getTextureView() {
-		if(target == null) return null;
-		return target.getColorTextureView();
+
+	public int getTexture() {
+		return tex;
 	}
-	
-	public Identifier getTextureLocation() {
-		return location;
-	}
-	
+
 	public boolean isValid() {
-		return target != null;
+		return width > 0 && height > 0;
 	}
-	
-	private static class FramebufferTexture extends AbstractTexture {
-		
-		public FramebufferTexture(GpuTextureView textureView) {
-			this.textureView = textureView;
-			this.texture = textureView.texture();
-			this.sampler = RenderUtils.WINDOW_SAMPLER.get();
+
+	private static void ensureShadersCompiled() {
+		if(!shadersCompiled) {
+			try {
+				compileShaders();
+				shadersCompiled = true;
+			} catch (IOException e) {
+				e.printStackTrace();
+				throw new IllegalStateException("Failed to compile shader: IOException");
+			}
 		}
-		
-		@Override
-		public void close() {
-		}
-		
 	}
-	
-	private static record WindowInfoUniform(Matrix4fc mat, boolean alpha) implements DynamicUniform {
-		
-		public static final int SIZE = new Std140SizeCalculator().putMat4f().putFloat().get();
-		
-		@Override
-		public void write(ByteBuffer byteBuffer) {
-			Std140Builder.intoBuffer(byteBuffer).putMat4f(mat).putFloat(alpha ? 0.0f : 1.0f);
-		}
-		
+
+	private static void compileShaders() throws IOException {
+		InputStream vertIn = Minecraft.getInstance().getResourceManager().getResource(SHADER_VERT_LOC).get().open();
+		String vertCode = new String(vertIn.readAllBytes(), StandardCharsets.UTF_8);
+		vertIn.close();
+
+		InputStream fragIn = Minecraft.getInstance().getResourceManager().getResource(SHADER_FRAG_LOC).get().open();
+		String fragCode = new String(fragIn.readAllBytes(), StandardCharsets.UTF_8);
+		fragIn.close();
+
+		InputStream fragOpaqueIn = Minecraft.getInstance().getResourceManager().getResource(SHADER_FRAG_OPAQUE_LOC).get().open();
+		String fragOpaqueCode = new String(fragOpaqueIn.readAllBytes(), StandardCharsets.UTF_8);
+		fragOpaqueIn.close();
+
+		SHADER = compileShaderProgram(vertCode, fragCode);
+		SHADER_OPAQUE = compileShaderProgram(vertCode, fragOpaqueCode);
 	}
-	
+
+	private static int compileVertexShader(String code) {
+		int vertexShader = GL33.glCreateShader(GL33.GL_VERTEX_SHADER);
+		GL33.glShaderSource(vertexShader, code);
+		GL33.glCompileShader(vertexShader);
+
+		int[] compileStatus = new int[1];
+		GL33.glGetShaderiv(vertexShader, GL33.GL_COMPILE_STATUS, compileStatus);
+
+		if(compileStatus[0] == GL33.GL_FALSE) {
+			String info = GL33.glGetShaderInfoLog(vertexShader);
+			GL33.glDeleteShader(vertexShader);
+			throw new IllegalStateException("Failed to compile vertex shader:\n" + info);
+		}
+
+		return vertexShader;
+	}
+
+	private static int compileFragmentShader(String code) {
+		int fragmentShader = GL33.glCreateShader(GL33.GL_FRAGMENT_SHADER);
+		GL33.glShaderSource(fragmentShader, code);
+		GL33.glCompileShader(fragmentShader);
+
+		int[] compileStatus = new int[1];
+		GL33.glGetShaderiv(fragmentShader, GL33.GL_COMPILE_STATUS, compileStatus);
+
+		if(compileStatus[0] == GL33.GL_FALSE) {
+			String info = GL33.glGetShaderInfoLog(fragmentShader);
+			GL33.glDeleteShader(fragmentShader);
+			throw new IllegalStateException("Failed to compile fragment shader:\n" + info);
+		}
+
+		return fragmentShader;
+	}
+
+	private static int compileShaderProgram(String vertexShaderCode, String fragmentShaderCode) {
+		int vertexShader = compileVertexShader(vertexShaderCode);
+		int fragmentShader = compileFragmentShader(fragmentShaderCode);
+
+		int program = GL33.glCreateProgram();
+		GL33.glAttachShader(program, vertexShader);
+		GL33.glAttachShader(program, fragmentShader);
+		GL33.glLinkProgram(program);
+
+		GL33.glDeleteShader(vertexShader);
+		GL33.glDeleteShader(fragmentShader);
+
+		int[] linkStatus = new int[1];
+		GL33.glGetProgramiv(program, GL33.GL_LINK_STATUS, linkStatus);
+
+		if(linkStatus[0] == GL33.GL_FALSE) {
+			String info = GL33.glGetProgramInfoLog(program);
+			GL33.glDeleteProgram(program);
+			throw new IllegalStateException("Failed to link shader:\n" + info);
+		}
+
+		return program;
+	}
+
 }
