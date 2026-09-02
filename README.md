@@ -6,9 +6,13 @@ Wayland Compositor in Minecraft
 
 Now available on [Modrinth](https://modrinth.com/mod/waylandcraft)!
 
+## A work of evil AI
+## A work of evil AI
+## A work of evil AI
+
 ## System dependencies
 - OS: Linux
-- Minecraft 26.1.2
+- Minecraft 1.21.1
 - Fabric mod loader
 - xkbcommon library 1.11.0
 - xkbcommon tools (xkbcli)
