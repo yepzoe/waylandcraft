@@ -21,6 +21,7 @@ import com.mojang.math.Axis;
 
 import dev.evvie.waylandcraft.WaylandCraft;
 import dev.evvie.waylandcraft.WaylandCraftCommon;
+import dev.evvie.waylandcraft.compat.IrisCompat;
 import net.fabricmc.fabric.api.client.rendering.v1.CoreShaderRegistrationCallback;
 import net.minecraft.Util;
 import net.minecraft.client.Camera;
@@ -196,7 +197,9 @@ public class RenderUtils {
 		VertexConsumer buffer;
 
 		// Front quad
-		buffer = source.getBuffer(cutout ? RenderUtils.rendertypeWindowCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindow(framebuffer.getTexture()));
+		buffer = source.getBuffer(IrisCompat.isShaderActive()
+				? RenderType.entityCutout(framebuffer.getTextureLocation())
+				: cutout ? RenderUtils.rendertypeWindowCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindow(framebuffer.getTexture()));
 		buffer.addVertex(/* pos */ vec1.x, vec1.y, vec1.z, /* color */ Color.white.getRGB(), /* uv */ uv1.x, uv1.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
 		buffer.addVertex(/* pos */ vec2.x, vec2.y, vec2.z, /* color */ Color.white.getRGB(), /* uv */ uv2.x, uv2.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
 		buffer.addVertex(/* pos */ vec3.x, vec3.y, vec3.z, /* color */ Color.white.getRGB(), /* uv */ uv3.x, uv3.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
@@ -204,7 +207,9 @@ public class RenderUtils {
 		source.endBatch();
 
 		// Back quad
-		buffer = source.getBuffer(cutout ? RenderUtils.rendertypeWindowColorlessCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindowColorless(framebuffer.getTexture()));
+		buffer = source.getBuffer(IrisCompat.isShaderActive()
+				? RenderType.entityCutout(framebuffer.getTextureLocation())
+				: cutout ? RenderUtils.rendertypeWindowColorlessCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindowColorless(framebuffer.getTexture()));
 		buffer.addVertex(/* pos */ vec4.x, vec4.y, vec4.z, /* color */ Color.white.getRGB(), /* uv */ uv4.x, uv4.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
 		buffer.addVertex(/* pos */ vec3.x, vec3.y, vec3.z, /* color */ Color.white.getRGB(), /* uv */ uv3.x, uv3.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
 		buffer.addVertex(/* pos */ vec2.x, vec2.y, vec2.z, /* color */ Color.white.getRGB(), /* uv */ uv2.x, uv2.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);

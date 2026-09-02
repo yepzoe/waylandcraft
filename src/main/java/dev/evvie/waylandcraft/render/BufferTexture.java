@@ -117,6 +117,8 @@ public abstract class BufferTexture {
 
 		public final long handle;
 		private final long eglImage;
+		private boolean eglImageReleased;
+		private boolean textureReleased;
 
 		public DmabufTexture(long handle, long eglImage, int width, int height) {
 			super(width, height, BufferTexture.FORMAT_ARGB8888);
@@ -144,20 +146,27 @@ public abstract class BufferTexture {
 		}
 
 		public void free() {
+			freeEGL();
+			doReleaseTexure();
+		}
+
+		private void freeEGLImage() {
+			if(eglImageReleased) return;
 			long eglDestroyImage = GLFW.glfwGetProcAddress("eglDestroyImage");
 			long display = GLFWNativeEGL.glfwGetEGLDisplay();
 
 			JNI.invokePPI(display, this.eglImage, eglDestroyImage);
-			super.release();
+			eglImageReleased = true;
 		}
 
 		public void doReleaseTexure() {
-			// The dmabuf target was introduced by the newer renderer; the legacy
-			// path only needs to release the OpenGL texture when the EGL image dies.
+			if(textureReleased) return;
+			super.release();
+			textureReleased = true;
 		}
 
 		public void freeEGL() {
-			free();
+			freeEGLImage();
 		}
 
 		public void copyData() {

@@ -104,6 +104,8 @@ public class WaylandCraft implements ClientModInitializer {
 	public KeyboardCaptureMode keyboardCaptureMode = KeyboardCaptureMode.NONE;
 	
 	public PointerCapture pointerCapture = null;
+	private boolean minecraftCursorCaptured = false;
+	private int previousCursorMode = GLFW.GLFW_CURSOR_NORMAL;
 	
 	private boolean playerUsingWindowItem = false;
 	private boolean playerWasUsingWindowItem = false;
@@ -130,7 +132,7 @@ public class WaylandCraft implements ClientModInitializer {
 			return;
 		}
 		
-		WorldRenderEvents.LAST.register(this::renderWorld);
+		WorldRenderEvents.AFTER_ENTITIES.register(this::renderWorld);
 		HudRenderCallback.EVENT.register(hudRenderer::render);
 		ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
 		ClientPlayConnectionEvents.JOIN.register(this::onClientJoin);
@@ -439,6 +441,18 @@ public class WaylandCraft implements ClientModInitializer {
 		if(pointerCapture == null) return;
 		bridge.unlockPointer();
 		pointerCapture = null;
+		if(minecraftCursorCaptured) {
+			GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().getWindow(), GLFW.GLFW_CURSOR, previousCursorMode);
+			minecraftCursorCaptured = false;
+		}
+	}
+
+	private void enableMinecraftCursorCapture() {
+		if(minecraftCursorCaptured) return;
+		long window = Minecraft.getInstance().getWindow().getWindow();
+		previousCursorMode = GLFW.glfwGetInputMode(window, GLFW.GLFW_CURSOR);
+		GLFW.glfwSetInputMode(window, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+		minecraftCursorCaptured = true;
 	}
 	
 	private void processPointerMotion(Camera camera) {
@@ -446,7 +460,7 @@ public class WaylandCraft implements ClientModInitializer {
 		
 		if(pointerCapture != null) {
 			if(!pointerCapture.surface.isAlive()) {
-				pointerCapture = null;
+				disablePointerCapture();
 				return;
 			}
 			
@@ -533,6 +547,7 @@ public class WaylandCraft implements ClientModInitializer {
 			
 			if(keyboardCaptureMode != KeyboardCaptureMode.NONE && bridge.maybeLockPointer(surface)) {
 				pointerCapture = new PointerCapture(surface, rel.x, rel.y);
+				enableMinecraftCursorCapture();
 			}
 			
 			// Focus on hover

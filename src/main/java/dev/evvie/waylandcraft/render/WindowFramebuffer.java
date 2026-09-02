@@ -7,27 +7,38 @@ import java.nio.charset.StandardCharsets;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL33;
 
+import com.mojang.blaze3d.platform.GlStateManager;
+
 import dev.evvie.waylandcraft.WaylandCraftCommon;
 import dev.evvie.waylandcraft.bridge.WLCSurface;
 import dev.evvie.waylandcraft.bridge.WLCSurface.ViewportSource;
+import dev.evvie.waylandcraft.compat.IrisCompat;
 import dev.evvie.waylandcraft.displays.FramebufferRenderable;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.resources.ResourceManager;
 
 public class WindowFramebuffer implements FramebufferRenderable {
 
+	private static int nextTextureId;
+
 	private static int SHADER = -1;
 	private static int SHADER_OPAQUE = -1;
+	private static int SHADER_IRIS = -1;
 	private static boolean shadersCompiled = false;
 
 	private static ResourceLocation SHADER_FRAG_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window.fsh");
 	private static ResourceLocation SHADER_FRAG_OPAQUE_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window_opaque.fsh");
+	private static ResourceLocation SHADER_FRAG_IRIS_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window_iris.fsh");
 	private static ResourceLocation SHADER_VERT_LOC = ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "shaders/window.vsh");
 
 	public final WLCSurface surfaceTree;
 
 	private int tex;
-
+	private final ResourceLocation textureLocation = ResourceLocation.fromNamespaceAndPath(
+			WaylandCraftCommon.MOD_ID, "window/" + nextTextureId++);
+	private final NativeTexture nativeTexture = new NativeTexture();
 	private int width = -1;
 	private int height = -1;
 	private int xoff = -1;
@@ -35,6 +46,7 @@ public class WindowFramebuffer implements FramebufferRenderable {
 
 	public WindowFramebuffer(WLCSurface surfaceTree) {
 		this.surfaceTree = surfaceTree;
+		Minecraft.getInstance().getTextureManager().register(textureLocation, nativeTexture);
 	}
 
 	public static WindowFramebuffer renderSurfaceTree(WLCSurface surfaceTree) {
@@ -87,7 +99,7 @@ public class WindowFramebuffer implements FramebufferRenderable {
 		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MIN_FILTER, GL33.GL_LINEAR);
 		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MAG_FILTER, GL33.GL_NEAREST);
 		GL33.glBindTexture(GL33.GL_TEXTURE_2D, 0);
-
+		nativeTexture.setId(tex);
 		if(width == 0 || height == 0) return;
 
 		int fbo = GL33.glGenFramebuffers();
@@ -117,7 +129,7 @@ public class WindowFramebuffer implements FramebufferRenderable {
 	}
 
 	private void drawSurfaces() {
-		GL33.glViewport(0, 0, width, height);
+		GlStateManager._viewport(0, 0, width, height);
 		GL33.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 		GL33.glClear(GL33.GL_COLOR_BUFFER_BIT | GL33.GL_DEPTH_BUFFER_BIT);
 
@@ -152,6 +164,7 @@ public class WindowFramebuffer implements FramebufferRenderable {
 
 	public void destroy() {
 		freeTexture();
+		Minecraft.getInstance().getTextureManager().release(textureLocation);
 	}
 
 	private void renderSurface(WLCSurface surface, float x, float y) {
@@ -199,7 +212,9 @@ public class WindowFramebuffer implements FramebufferRenderable {
 		GL33.nglVertexAttribPointer(0, 2, GL33.GL_FLOAT, false, 4 * Float.BYTES, 0);
 		GL33.nglVertexAttribPointer(1, 2, GL33.GL_FLOAT, false, 4 * Float.BYTES, 2 * Float.BYTES);
 
-		int shader = buf.format == BufferTexture.FORMAT_XRGB8888 ? SHADER_OPAQUE : SHADER;
+		int shader = IrisCompat.isShaderActive()
+				? SHADER_IRIS
+				: buf.format == BufferTexture.FORMAT_XRGB8888 ? SHADER_OPAQUE : SHADER;
 
 		// Note: Both shaders use same uniforms
 
@@ -242,8 +257,27 @@ public class WindowFramebuffer implements FramebufferRenderable {
 		return tex;
 	}
 
+	public ResourceLocation getTextureLocation() {
+		return textureLocation;
+	}
+
 	public boolean isValid() {
 		return width > 0 && height > 0;
+	}
+
+	private final class NativeTexture extends AbstractTexture {
+
+		private void setId(int id) {
+			this.id = id;
+		}
+
+		@Override
+		public void load(ResourceManager resourceManager) {
+		}
+
+		@Override
+		public void close() {
+		}
 	}
 
 	private static void ensureShadersCompiled() {
@@ -271,8 +305,13 @@ public class WindowFramebuffer implements FramebufferRenderable {
 		String fragOpaqueCode = new String(fragOpaqueIn.readAllBytes(), StandardCharsets.UTF_8);
 		fragOpaqueIn.close();
 
+		InputStream fragIrisIn = Minecraft.getInstance().getResourceManager().getResource(SHADER_FRAG_IRIS_LOC).get().open();
+		String fragIrisCode = new String(fragIrisIn.readAllBytes(), StandardCharsets.UTF_8);
+		fragIrisIn.close();
+
 		SHADER = compileShaderProgram(vertCode, fragCode);
 		SHADER_OPAQUE = compileShaderProgram(vertCode, fragOpaqueCode);
+		SHADER_IRIS = compileShaderProgram(vertCode, fragIrisCode);
 	}
 
 	private static int compileVertexShader(String code) {

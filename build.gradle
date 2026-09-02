@@ -27,6 +27,10 @@ loom {
 	}
 }
 
+def nativeRelease = tasks.register("buildNativeRelease", Exec) {
+	commandLine "cargo", "build", "--manifest-path", "native/Cargo.toml", "--release"
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
@@ -38,6 +42,11 @@ dependencies {
 }
 
 processResources {
+	dependsOn nativeRelease
+	from("native/target/release") {
+		include "libwaylandcraft.so"
+	}
+
 	def version = project.version
 	inputs.property "version", version
 
