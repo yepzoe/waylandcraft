@@ -8,8 +8,10 @@ Now available on [Modrinth](https://modrinth.com/mod/waylandcraft)!
 
 ## A work of AI
 I don't really know what i'm doing
+
 Probably a buggy mess but it kind of works
 Shaders work
+
 After joining a world it may be buggy for a while (again i dont know what i'm doing)
 
 ## System dependencies
