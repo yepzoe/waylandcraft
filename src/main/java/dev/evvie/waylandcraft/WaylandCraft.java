@@ -35,18 +35,19 @@ import dev.evvie.waylandcraft.item.WindowItem;
 import dev.evvie.waylandcraft.item.WindowItemManager;
 import dev.evvie.waylandcraft.render.WindowInHandRenderer;
 import dev.evvie.waylandcraft.render.WindowInItemFrameRenderer;
-import dev.evvie.waylandcraft.render.model.WindowItemModel;
+import dev.evvie.waylandcraft.render.RenderUtils;
 import dev.evvie.waylandcraft.settings.WaylandCraftSettings;
 import dev.evvie.waylandcraft.settings.WaylandCraftSettingsManager;
 import dev.evvie.waylandcraft.utils.CursorShape;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
-import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
-import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
-import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.CoreShaderRegistrationCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.networking.v1.PacketSender;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Camera;
@@ -55,7 +56,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item.TooltipContext;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
@@ -64,7 +65,7 @@ import net.minecraft.world.phys.Vec3;
 
 public class WaylandCraft implements ClientModInitializer {
 	
-	private static final KeyMapping.Category KEYBIND_CATEGORY = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "keys"));
+	private static final String KEYBIND_CATEGORY = "key.categories.waylandcraft";
 	
 	public static WaylandCraft instance;
 	public static boolean fallbackMode = false;
@@ -103,6 +104,8 @@ public class WaylandCraft implements ClientModInitializer {
 	public KeyboardCaptureMode keyboardCaptureMode = KeyboardCaptureMode.NONE;
 	
 	public PointerCapture pointerCapture = null;
+	private boolean minecraftCursorCaptured = false;
+	private int previousCursorMode = GLFW.GLFW_CURSOR_NORMAL;
 	
 	private boolean playerUsingWindowItem = false;
 	private boolean playerWasUsingWindowItem = false;
@@ -114,12 +117,12 @@ public class WaylandCraft implements ClientModInitializer {
 		WaylandCraftCommon.LOGGER.info("Initializing WaylandCraft");
 		
 		instance = this;
+		CoreShaderRegistrationCallback.EVENT.register(RenderUtils::registerShaders);
 		
-		keyOpenScreen = KeyMappingHelper.registerKeyMapping(new KeyMapping("waylandcraft.key.windowManager", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B, KEYBIND_CATEGORY));
-		keyOpenAppLauncher = KeyMappingHelper.registerKeyMapping(new KeyMapping("waylandcraft.key.appLauncher", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_V, KEYBIND_CATEGORY));
-		keyCaptureKeyboard = KeyMappingHelper.registerKeyMapping(new KeyMapping("waylandcraft.key.captureKeyboard", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, KEYBIND_CATEGORY));
+		keyOpenScreen = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.windowManager", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B, KEYBIND_CATEGORY));
+		keyOpenAppLauncher = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.appLauncher", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_V, KEYBIND_CATEGORY));
+		keyCaptureKeyboard = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.captureKeyboard", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, KEYBIND_CATEGORY));
 		
-		WindowItemModel.register();
 		
 		settingsManager = new WaylandCraftSettingsManager(this);
 		
@@ -129,8 +132,8 @@ public class WaylandCraft implements ClientModInitializer {
 			return;
 		}
 		
-		LevelRenderEvents.COLLECT_SUBMITS.register(this::renderWorld);
-		LevelRenderEvents.END_EXTRACTION.register(this::updateWorld);
+		WorldRenderEvents.AFTER_ENTITIES.register(this::renderWorld);
+		HudRenderCallback.EVENT.register(hudRenderer::render);
 		ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
 		ClientPlayConnectionEvents.JOIN.register(this::onClientJoin);
 		ClientPlayConnectionEvents.DISCONNECT.register(this::onClientDisconnect);
@@ -139,7 +142,6 @@ public class WaylandCraft implements ClientModInitializer {
 		
 		WaylandCraftCommon.instance.windowItemInteractionProvider = itemManager;
 		
-		hudRenderer.register();
 	}
 	
 	/* Update bridge and clients. May be called at any state of the game, even outside of a level
@@ -168,13 +170,14 @@ public class WaylandCraft implements ClientModInitializer {
 		});
 	}
 	
-	public void renderWorld(LevelRenderContext ctx) {
+	public void renderWorld(WorldRenderContext ctx) {
+		Camera camera = ctx.camera();
+		updateWorld(camera);
 		if(bridge == null) return;
-		
 		displays.forEach((d) -> d.render(ctx));
 	}
-	
-	public void updateWorld(LevelExtractionContext ctx) {
+
+	public void updateWorld(Camera camera) {
 		for(WLCPopup popup : bridge.getMappedPopups()) {
 			WLCAbstractWindow root = popup;
 			while((root = ((WLCPopup) root).getParent()) instanceof WLCPopup);
@@ -213,7 +216,6 @@ public class WaylandCraft implements ClientModInitializer {
 			bridge.focusSurface(focus);
 		}
 		
-		Camera camera = ctx.camera();
 		processPointerMotion(camera);
 		
 		if(Minecraft.getInstance().player == null || !Minecraft.getInstance().player.isUsingItem()) playerUsingWindowItem = false;
@@ -228,7 +230,9 @@ public class WaylandCraft implements ClientModInitializer {
 						display.anchorDistance = 2.0;
 					}
 					
-					display.doGrabMove(camera.position(), new Vec3(camera.forwardVector()), new Vec3(camera.upVector()), camera.yRot());
+					display.doGrabMove(camera.getPosition(),
+							new Vec3(camera.getLookVector().x(), camera.getLookVector().y(), camera.getLookVector().z()),
+							new Vec3(camera.getUpVector().x(), camera.getUpVector().y(), camera.getUpVector().z()), camera.getYRot());
 					
 					WaylandCraft.instance.bridge.focusSurface(toplevel);
 				}
@@ -243,7 +247,7 @@ public class WaylandCraft implements ClientModInitializer {
 	public void startUsingWindowItem() {
 		playerUsingWindowItem = true;
 	}
-	
+
 	public void enableKeyboardCapture(boolean hardCapture) {
 		if(keyboardCaptureMode != KeyboardCaptureMode.NONE) return;
 		
@@ -437,6 +441,18 @@ public class WaylandCraft implements ClientModInitializer {
 		if(pointerCapture == null) return;
 		bridge.unlockPointer();
 		pointerCapture = null;
+		if(minecraftCursorCaptured) {
+			GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().getWindow(), GLFW.GLFW_CURSOR, previousCursorMode);
+			minecraftCursorCaptured = false;
+		}
+	}
+
+	private void enableMinecraftCursorCapture() {
+		if(minecraftCursorCaptured) return;
+		long window = Minecraft.getInstance().getWindow().getWindow();
+		previousCursorMode = GLFW.glfwGetInputMode(window, GLFW.GLFW_CURSOR);
+		GLFW.glfwSetInputMode(window, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+		minecraftCursorCaptured = true;
 	}
 	
 	private void processPointerMotion(Camera camera) {
@@ -444,7 +460,7 @@ public class WaylandCraft implements ClientModInitializer {
 		
 		if(pointerCapture != null) {
 			if(!pointerCapture.surface.isAlive()) {
-				pointerCapture = null;
+				disablePointerCapture();
 				return;
 			}
 			
@@ -470,9 +486,9 @@ public class WaylandCraft implements ClientModInitializer {
 			return;
 		}
 		
-		Vec3 pos = camera.position();
-		Vec3 look = new Vec3(camera.forwardVector());
-		Vec3 up = new Vec3(camera.upVector());
+		Vec3 pos = camera.getPosition();
+		Vec3 look = new Vec3(camera.getLookVector().x(), camera.getLookVector().y(), camera.getLookVector().z());
+		Vec3 up = new Vec3(camera.getUpVector().x(), camera.getUpVector().y(), camera.getUpVector().z());
 		
 		DisplayHitResult finalHitResult = null;
 		double finalDistance = Double.POSITIVE_INFINITY;
@@ -503,7 +519,7 @@ public class WaylandCraft implements ClientModInitializer {
 			this.overridePickBlock = true;
 			this.cursorShape = bridge.getCursorShape();
 			
-			pointerGrabs.moveWorld(pos, look, up, camera.yRot(), camera.xRot());
+			pointerGrabs.moveWorld(pos, look, up, camera.getYRot(), camera.getXRot());
 			if(finalHitResult != null) {
 				pointerGrabs.hover(finalHitResult.target.window, finalHitResult.surface, finalHitResult.surfaceLocalRelative.x, finalHitResult.surfaceLocalRelative.y);
 			}
@@ -531,6 +547,7 @@ public class WaylandCraft implements ClientModInitializer {
 			
 			if(keyboardCaptureMode != KeyboardCaptureMode.NONE && bridge.maybeLockPointer(surface)) {
 				pointerCapture = new PointerCapture(surface, rel.x, rel.y);
+				enableMinecraftCursorCapture();
 			}
 			
 			// Focus on hover
@@ -734,4 +751,3 @@ public class WaylandCraft implements ClientModInitializer {
 	}
 	
 }
-

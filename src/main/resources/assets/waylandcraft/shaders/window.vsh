@@ -1,16 +1,12 @@
-#version 150
+#version 430 core
 
-layout(std140) uniform window_info {
-	mat4 transform;
-	float alphaBlend;
-};
-
-in vec3 position;
-in vec2 uv;
+layout(location = 0) in vec2 pos;
+layout(location = 1) in vec2 uv;
 
 out vec2 texCoord;
+uniform mat4 transform;
 
 void main() {
-	gl_Position = transform * vec4(position, 1.0);
+	gl_Position = transform * vec4(pos, 0.0f, 1.0f);
 	texCoord = uv;
 }

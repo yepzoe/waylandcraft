@@ -3,7 +3,7 @@ package dev.evvie.waylandcraft.utils;
 import org.jetbrains.annotations.Nullable;
 
 public enum CursorShape {
-	
+
 	HIDE(0),
 	DEFAULT(1),
 	HELP(3),
@@ -28,19 +28,19 @@ public enum CursorShape {
 	ZOOM_IN(33),
 	ZOOM_OUT(34),
 	ALL_RESIZE(36);
-	
+
 	// Serialization number for cursor shape. Should match cursor-shape wayland protocol for all cursors except extensions.
 	public final int id;
-	
+
 	private CursorShape(int id) {
 		this.id = id;
 	}
-	
+
 	public static @Nullable CursorShape fromId(int id) {
 		for(CursorShape shape : values()) {
 			if(shape.id == id) return shape;
 		}
 		return null;
 	}
-	
+
 }

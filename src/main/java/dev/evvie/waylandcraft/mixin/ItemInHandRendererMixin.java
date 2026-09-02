@@ -13,14 +13,14 @@ import dev.evvie.waylandcraft.WaylandCraft;
 import dev.evvie.waylandcraft.item.WindowItem;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.ItemInHandRenderer;
-import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.item.ItemStack;
 
 @Mixin(ItemInHandRenderer.class)
 public abstract class ItemInHandRendererMixin {
-	
+
 	@Inject(method = "renderArmWithItem", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/vertex/PoseStack;pushPose()V"), cancellable = true)
 	public void renderArmWithItem(
 		AbstractClientPlayer player,
@@ -31,17 +31,17 @@ public abstract class ItemInHandRendererMixin {
 		ItemStack itemStack,
 		float handHeight,
 		PoseStack poseStack,
-		SubmitNodeCollector collector,
+		MultiBufferSource multiBufferSource,
 		int light,
 		CallbackInfo info,
 		@Local LocalRef<HumanoidArm> humanoidArmRef
 	) {
 		if(!itemStack.is(WindowItem.WINDOW)) return;
 		if(WaylandCraft.getToplevel(itemStack) == null) return;
-		
+
 		info.cancel();
-		
-		WaylandCraft.instance.windowInHandRenderer.render(poseStack, collector, attack, handHeight, light, humanoidArmRef.get(), itemStack);
+
+		WaylandCraft.instance.windowInHandRenderer.render(poseStack, multiBufferSource, attack, handHeight, light, humanoidArmRef.get(), itemStack);
 	}
-	
+
 }

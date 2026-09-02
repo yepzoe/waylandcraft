@@ -1,245 +1,273 @@
 package dev.evvie.waylandcraft.render;
 
+import java.awt.Color;
+import java.io.IOException;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import org.joml.Vector4f;
 
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.DepthStencilState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.AddressMode;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuSampler;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.PoseStack.Pose;
+import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormat.Mode;
+import com.mojang.math.Axis;
 
+import dev.evvie.waylandcraft.WaylandCraft;
 import dev.evvie.waylandcraft.WaylandCraftCommon;
 import dev.evvie.waylandcraft.compat.IrisCompat;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.SubmitNodeCollector;
-import net.minecraft.client.renderer.SubmitNodeCollector.CustomGeometryRenderer;
-import net.minecraft.client.renderer.rendertype.RenderSetup;
-import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.fabricmc.fabric.api.client.rendering.v1.CoreShaderRegistrationCallback;
+import net.minecraft.Util;
+import net.minecraft.client.Camera;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.MultiBufferSource.BufferSource;
+import net.minecraft.client.renderer.RenderStateShard;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.resources.Identifier;
-import net.minecraft.util.ARGB;
-import net.minecraft.util.LightCoordsUtil;
-import net.minecraft.util.Util;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 
 public class RenderUtils {
-	
-	private static final RenderPipeline.Snippet WINDOW_PIPELINE_SNIPPET = RenderPipeline.builder(RenderPipelines.MATRICES_PROJECTION_SNIPPET)
-			.withVertexShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "core/rendertype_window"))
-			.withFragmentShader(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "core/rendertype_window"))
-			.withSampler("Sampler0")
-			.withDepthStencilState(DepthStencilState.DEFAULT)
-			.withVertexFormat(DefaultVertexFormat.POSITION_TEX, VertexFormat.Mode.QUADS)
-			.buildSnippet();
-	
-	private static final RenderPipeline WINDOW_CUTOUT_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_cutout"))
-			.withShaderDefine("ALPHA_CUTOUT")
-			.build();
-	
-	private static final RenderPipeline WINDOW_TRANSLUCENT_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_translucent"))
-			.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-			.build();
-	
-	private static final RenderPipeline WINDOW_CUTOUT_ANTIALIASING_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_cutout"))
-			.withShaderDefine("ALPHA_CUTOUT")
-			.withShaderDefine("RGSS")
-			.build();
-	
-	private static final RenderPipeline WINDOW_TRANSLUCENT_ANTIALIASING_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_translucent"))
-			.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-			.withShaderDefine("RGSS")
-			.build();
-	
-	private static final RenderPipeline WINDOW_CUTOUT_BACKGROUND_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_cutout_background"))
-			.withShaderDefine("ALPHA_CUTOUT")
-			.withShaderDefine("NO_COLOR")
-			.build();
-	
-	private static final RenderPipeline WINDOW_TRANSLUCENT_BACKGROUND_PIPELINE = RenderPipeline.builder(WINDOW_PIPELINE_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "pipeline/window_translucent_background"))
-			.withShaderDefine("NO_COLOR")
-			.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-			.build();
-	
-	public static final Supplier<GpuSampler> WINDOW_SAMPLER = () -> RenderSystem.getSamplerCache().getSampler(AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.LINEAR, FilterMode.NEAREST, false);
-	
-	public static final Function<Identifier, RenderType> WINDOW_CUTOUT = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_CUTOUT_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_cutout", setup);
+
+	private static ShaderInstance RENDERTYPE_WINDOW;
+	private static ShaderInstance RENDERTYPE_WINDOW_CUTOUT;
+	private static ShaderInstance RENDERTYPE_WINDOW_COLORLESS;
+	private static ShaderInstance RENDERTYPE_WINDOW_COLORLESS_CUTOUT;
+	private static ShaderInstance POSITION_TEX_TRANSLUCENT;
+
+	public static void registerShaders(CoreShaderRegistrationCallback.RegistrationContext context) throws IOException {
+		context.register(ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "rendertype_window"), DefaultVertexFormat.NEW_ENTITY, shader -> {
+			RENDERTYPE_WINDOW = shader;
+		});
+		context.register(ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "rendertype_window_cutout"), DefaultVertexFormat.NEW_ENTITY, shader -> {
+			RENDERTYPE_WINDOW_CUTOUT = shader;
+		});
+		context.register(ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "rendertype_window_colorless"), DefaultVertexFormat.NEW_ENTITY, shader -> {
+			RENDERTYPE_WINDOW_COLORLESS = shader;
+		});
+		context.register(ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "rendertype_window_colorless_cutout"), DefaultVertexFormat.NEW_ENTITY, shader -> {
+			RENDERTYPE_WINDOW_COLORLESS_CUTOUT = shader;
+		});
+		context.register(ResourceLocation.fromNamespaceAndPath(WaylandCraftCommon.MOD_ID, "position_tex_translucent"), DefaultVertexFormat.POSITION_TEX, shader -> {
+			POSITION_TEX_TRANSLUCENT = shader;
+		});
+	}
+
+	public static ShaderInstance getRendertypeWindowShader() {
+		return RENDERTYPE_WINDOW;
+	}
+
+	public static ShaderInstance getRendertypeWindowColorlessShader() {
+		return RENDERTYPE_WINDOW_COLORLESS;
+	}
+
+	public static ShaderInstance getRendertypeWindowCutoutShader() {
+		return RENDERTYPE_WINDOW_CUTOUT;
+	}
+
+	public static ShaderInstance getRendertypeWindowColorlessCutoutShader() {
+		return RENDERTYPE_WINDOW_COLORLESS_CUTOUT;
+	}
+
+	public static ShaderInstance getPositionTexTranslucentShader() {
+		return POSITION_TEX_TRANSLUCENT;
+	}
+
+	public static RenderType rendertypeWindow(int texture) {
+		return DummyRenderType.WINDOW.apply(texture);
+	}
+
+	public static RenderType rendertypeWindowColorless(int texture) {
+		return DummyRenderType.WINDOW_COLORLESS.apply(texture);
+	}
+
+	public static RenderType rendertypeWindowCutout(int texture) {
+		return DummyRenderType.WINDOW_CUTOUT.apply(texture);
+	}
+
+	public static RenderType rendertypeWindowColorlessCutout(int texture) {
+		return DummyRenderType.WINDOW_COLORLESS_CUTOUT.apply(texture);
+	}
+
+	/* This whole subclass dummy is necessary to access the RenderType.CompositeState class */
+	private static class DummyRenderType extends RenderType {
+
+		public DummyRenderType(String string, VertexFormat vertexFormat, Mode mode, int i, boolean bl, boolean bl2, Runnable runnable, Runnable runnable2) {
+			super(string, vertexFormat, mode, i, bl, bl2, runnable, runnable2);
+			throw new IllegalStateException("DummyRenderType constructor called");
 		}
-	);
-	
-	public static final Function<Identifier, RenderType> WINDOW_TRANSLUCENT = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_TRANSLUCENT_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_translucent", setup);
+
+		public static Function<Integer, RenderType> WINDOW = Util.memoize(DummyRenderType::window);
+		public static Function<Integer, RenderType> WINDOW_COLORLESS = Util.memoize(DummyRenderType::windowColorless);
+		public static Function<Integer, RenderType> WINDOW_CUTOUT = Util.memoize(DummyRenderType::windowCutout);
+		public static Function<Integer, RenderType> WINDOW_COLORLESS_CUTOUT = Util.memoize(DummyRenderType::windowColorlessCutout);
+		private static final RenderStateShard.ShaderStateShard RENDERTYPE_WINDOW = new RenderStateShard.ShaderStateShard(RenderUtils::getRendertypeWindowShader);
+		private static final RenderStateShard.ShaderStateShard RENDERTYPE_WINDOW_COLORLESS = new RenderStateShard.ShaderStateShard(RenderUtils::getRendertypeWindowColorlessShader);
+		private static final RenderStateShard.ShaderStateShard RENDERTYPE_WINDOW_CUTOUT = new RenderStateShard.ShaderStateShard(RenderUtils::getRendertypeWindowCutoutShader);
+		private static final RenderStateShard.ShaderStateShard RENDERTYPE_WINDOW_COLORLESS_CUTOUT = new RenderStateShard.ShaderStateShard(RenderUtils::getRendertypeWindowColorlessCutoutShader);
+
+		private static RenderType window(int texture) {
+			RenderType.CompositeState compositeState = RenderType.CompositeState.builder()
+					.setShaderState(RENDERTYPE_WINDOW)
+					.setTextureState(new TextureIdShard(texture))
+					.setTransparencyState(TRANSLUCENT_TRANSPARENCY)
+					.setOutputState(TRANSLUCENT_TARGET)
+					.setLightmapState(NO_LIGHTMAP)
+					.setOverlayState(NO_OVERLAY)
+					.setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)
+					.createCompositeState(true);
+			return create("wlc_window", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.QUADS, RenderType.TRANSIENT_BUFFER_SIZE, true, true, compositeState);
 		}
-	);
-	
-	public static final Function<Identifier, RenderType> WINDOW_CUTOUT_ANTIALIAS = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_CUTOUT_ANTIALIASING_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_cutout_antialias", setup);
+
+		private static RenderType windowColorless(int texture) {
+			RenderType.CompositeState compositeState = RenderType.CompositeState.builder()
+					.setShaderState(RENDERTYPE_WINDOW_COLORLESS)
+					.setTextureState(new TextureIdShard(texture))
+					.setTransparencyState(TRANSLUCENT_TRANSPARENCY)
+					.setOutputState(TRANSLUCENT_TARGET)
+					.setLightmapState(NO_LIGHTMAP)
+					.setOverlayState(NO_OVERLAY)
+					.setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)
+					.createCompositeState(true);
+			return create("wlc_window_colorless", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.QUADS, RenderType.TRANSIENT_BUFFER_SIZE, true, true, compositeState);
 		}
-	);
-	
-	public static final Function<Identifier, RenderType> WINDOW_TRANSLUCENT_ANTIALIAS = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_TRANSLUCENT_ANTIALIASING_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_translucent_antialias", setup);
+
+		private static RenderType windowCutout(int texture) {
+			RenderType.CompositeState compositeState = RenderType.CompositeState.builder()
+					.setShaderState(RENDERTYPE_WINDOW_CUTOUT)
+					.setTextureState(new TextureIdShard(texture))
+					.setOutputState(MAIN_TARGET)
+					.setLightmapState(NO_LIGHTMAP)
+					.setOverlayState(NO_OVERLAY)
+					.setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)
+					.createCompositeState(true);
+			return create("wlc_window_cutout", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.QUADS, RenderType.TRANSIENT_BUFFER_SIZE, true, true, compositeState);
 		}
-	);
-	
-	public static final Function<Identifier, RenderType> WINDOW_BACKGROUND_CUTOUT = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_CUTOUT_BACKGROUND_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_cutout_background", setup);
+
+		private static RenderType windowColorlessCutout(int texture) {
+			RenderType.CompositeState compositeState = RenderType.CompositeState.builder()
+					.setShaderState(RENDERTYPE_WINDOW_COLORLESS_CUTOUT)
+					.setTextureState(new TextureIdShard(texture))
+					.setOutputState(MAIN_TARGET)
+					.setLightmapState(NO_LIGHTMAP)
+					.setOverlayState(NO_OVERLAY)
+					.setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)
+					.createCompositeState(true);
+			return create("wlc_window_colorless_cutout", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.QUADS, RenderType.TRANSIENT_BUFFER_SIZE, true, true, compositeState);
 		}
-	);
-	
-	public static final Function<Identifier, RenderType> WINDOW_BACKGROUND_TRANSLUCENT = Util.memoize(
-		(identifier) -> {
-			RenderSetup setup = RenderSetup.builder(WINDOW_TRANSLUCENT_BACKGROUND_PIPELINE)
-					.withTexture("Sampler0", identifier, WINDOW_SAMPLER)
-					.createRenderSetup();
-			return RenderType.create("window_translucent_background", setup);
+
+		private static class TextureIdShard extends RenderStateShard.EmptyTextureStateShard {
+
+			public TextureIdShard(int texture) {
+				super(() -> {
+					RenderSystem.setShaderTexture(0, texture);
+				}, () -> {});
+			}
+
 		}
-	);
-	
-	public static void renderFramebuffer(WindowFramebuffer framebuffer, PoseStack poseStack, SubmitNodeCollector collector, boolean cutout, Vec3 origin, Vec3 spanX, Vec3 spanY) {
-		if(!framebuffer.isValid()) return;
-		
-		if(IrisCompat.isShaderActive()) {
-			collector.submitCustomGeometry(poseStack, RenderTypes.entityCutoutCull(framebuffer.getTextureLocation()), new FramebufferRenderInstanceEntity(origin, spanX, spanY, ARGB.white(1.0f), OverlayTexture.NO_OVERLAY, LightCoordsUtil.FULL_BRIGHT, false));
-			collector.submitCustomGeometry(poseStack, RenderTypes.entityCutoutCull(framebuffer.getTextureLocation()), new FramebufferRenderInstanceEntity(origin, spanX, spanY, ARGB.black(1.0f), OverlayTexture.NO_OVERLAY, LightCoordsUtil.FULL_BRIGHT, true));
-			return;
-		}
-		
-		Function<Identifier, RenderType> renderType;
-		
-		final boolean antialiasing = true;
-		
+
+	}
+
+	public static void renderWindow(WindowFramebuffer framebuffer, boolean cutout, Pose pose, Vec3 pos1, Vec3 pos2, Vec3 pos3, Vec3 pos4, Vec2 uv1, Vec2 uv2, Vec2 uv3, Vec2 uv4) {
+		renderWindow(framebuffer, cutout, pose, pos1, pos2, pos3, pos4, uv1, uv2, uv3, uv4,
+				Minecraft.getInstance().renderBuffers().bufferSource());
+	}
+
+	private static void renderWindow(WindowFramebuffer framebuffer, boolean cutout, Pose pose, Vec3 pos1, Vec3 pos2, Vec3 pos3, Vec3 pos4, Vec2 uv1, Vec2 uv2, Vec2 uv3, Vec2 uv4, BufferSource source) {
+		Vector3f vec1 = pose.pose().transformPosition((float) pos1.x, (float) pos1.y, (float) pos1.z, new Vector3f());
+		Vector3f vec2 = pose.pose().transformPosition((float) pos2.x, (float) pos2.y, (float) pos2.z, new Vector3f());
+		Vector3f vec3 = pose.pose().transformPosition((float) pos3.x, (float) pos3.y, (float) pos3.z, new Vector3f());
+		Vector3f vec4 = pose.pose().transformPosition((float) pos4.x, (float) pos4.y, (float) pos4.z, new Vector3f());
+
+		Vector3f normal = pose.transformNormal(0, 0, 1, new Vector3f());
+
+		int overlayCoords = OverlayTexture.NO_OVERLAY;
+		int light = LightTexture.FULL_BRIGHT;
+
+		VertexConsumer buffer;
+
 		// Front quad
-		if(antialiasing) renderType = cutout ? WINDOW_CUTOUT_ANTIALIAS : WINDOW_TRANSLUCENT_ANTIALIAS;
-		else renderType = cutout ? WINDOW_CUTOUT : WINDOW_TRANSLUCENT;
-		collector.submitCustomGeometry(poseStack, renderType.apply(framebuffer.getTextureLocation()), new FramebufferRenderInstance(origin, spanX, spanY, false));
-		
+		buffer = source.getBuffer(IrisCompat.isShaderActive()
+				? RenderType.entityCutout(framebuffer.getTextureLocation())
+				: cutout ? RenderUtils.rendertypeWindowCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindow(framebuffer.getTexture()));
+		buffer.addVertex(/* pos */ vec1.x, vec1.y, vec1.z, /* color */ Color.white.getRGB(), /* uv */ uv1.x, uv1.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec2.x, vec2.y, vec2.z, /* color */ Color.white.getRGB(), /* uv */ uv2.x, uv2.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec3.x, vec3.y, vec3.z, /* color */ Color.white.getRGB(), /* uv */ uv3.x, uv3.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec4.x, vec4.y, vec4.z, /* color */ Color.white.getRGB(), /* uv */ uv4.x, uv4.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		source.endBatch();
+
 		// Back quad
-		renderType = cutout ? WINDOW_BACKGROUND_CUTOUT : WINDOW_BACKGROUND_TRANSLUCENT;
-		collector.submitCustomGeometry(poseStack, renderType.apply(framebuffer.getTextureLocation()), new FramebufferRenderInstance(origin, spanX, spanY, true));
+		buffer = source.getBuffer(IrisCompat.isShaderActive()
+				? RenderType.entityCutout(framebuffer.getTextureLocation())
+				: cutout ? RenderUtils.rendertypeWindowColorlessCutout(framebuffer.getTexture()) : RenderUtils.rendertypeWindowColorless(framebuffer.getTexture()));
+		buffer.addVertex(/* pos */ vec4.x, vec4.y, vec4.z, /* color */ Color.white.getRGB(), /* uv */ uv4.x, uv4.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec3.x, vec3.y, vec3.z, /* color */ Color.white.getRGB(), /* uv */ uv3.x, uv3.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec2.x, vec2.y, vec2.z, /* color */ Color.white.getRGB(), /* uv */ uv2.x, uv2.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		buffer.addVertex(/* pos */ vec1.x, vec1.y, vec1.z, /* color */ Color.white.getRGB(), /* uv */ uv1.x, uv1.y, /* overlay */ overlayCoords, /* uv2 */ light, /* normal */ normal.x, normal.y, normal.z);
+		source.endBatch();
 	}
-	
-	public static final record FramebufferRenderInstance(Vec3 origin, Vec3 spanX, Vec3 spanY, boolean reverse) implements CustomGeometryRenderer {
-		
-		@Override
-		public void render(Pose pose, VertexConsumer buffer) {
-			Vec3 tl = origin;
-			Vec3 bl = tl.add(spanY);
-			Vec3 br = bl.add(spanX);
-			Vec3 tr = tl.add(spanX);
-			
-			if(!reverse) {
-				buffer.addVertex(pose, tl.toVector3f()).setUv(0.0f, 0.0f);
-				buffer.addVertex(pose, bl.toVector3f()).setUv(0.0f, 1.0f);
-				buffer.addVertex(pose, br.toVector3f()).setUv(1.0f, 1.0f);
-				buffer.addVertex(pose, tr.toVector3f()).setUv(1.0f, 0.0f);
-			}
-			else {
-				buffer.addVertex(pose, tr.toVector3f()).setUv(1.0f, 0.0f);
-				buffer.addVertex(pose, br.toVector3f()).setUv(1.0f, 1.0f);
-				buffer.addVertex(pose, bl.toVector3f()).setUv(0.0f, 1.0f);
-				buffer.addVertex(pose, tl.toVector3f()).setUv(0.0f, 0.0f);
-			}
-		}
-		
+
+	public static Pose cameraTransformPose(Camera camera) {
+		PoseStack matrixStack = new PoseStack();
+		matrixStack.mulPose(Axis.XP.rotationDegrees(camera.getXRot()));
+		matrixStack.mulPose(Axis.YP.rotationDegrees(camera.getYRot() + 180.0F));
+		matrixStack.translate(-camera.getPosition().x, -camera.getPosition().y, -camera.getPosition().z);
+
+		return matrixStack.last();
 	}
-	
-	public static final record FramebufferRenderInstanceEntity(Vec3 origin, Vec3 spanX, Vec3 spanY, int color, int overlayCoords, int light, boolean reverse) implements CustomGeometryRenderer {
-		
-		@Override
-		public void render(Pose pose, VertexConsumer buffer) {
-			Vec3 tl = origin;
-			Vec3 bl = tl.add(spanY);
-			Vec3 br = bl.add(spanX);
-			Vec3 tr = tl.add(spanX);
-			Vec3 normal = spanY.cross(spanX).normalize();
-			
-			Vector4f pos1 = pose.pose().transform(new Vector4f((float) tl.x, (float) tl.y, (float) tl.z, 1.0f));
-			Vector4f pos2 = pose.pose().transform(new Vector4f((float) bl.x, (float) bl.y, (float) bl.z, 1.0f));
-			Vector4f pos3 = pose.pose().transform(new Vector4f((float) br.x, (float) br.y, (float) br.z, 1.0f));
-			Vector4f pos4 = pose.pose().transform(new Vector4f((float) tr.x, (float) tr.y, (float) tr.z, 1.0f));
-			
-			Vector3f norm = pose.transformNormal(normal.toVector3f(), new Vector3f());
-			
-			if(!reverse) {
-				buffer.addVertex(pos1.x, pos1.y, pos1.z, color, 0.0f, 0.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos2.x, pos2.y, pos2.z, color, 0.0f, 1.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos3.x, pos3.y, pos3.z, color, 1.0f, 1.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos4.x, pos4.y, pos4.z, color, 1.0f, 0.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-			}
-			else {
-				buffer.addVertex(pos4.x, pos4.y, pos4.z, color, 1.0f, 0.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos3.x, pos3.y, pos3.z, color, 1.0f, 1.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos2.x, pos2.y, pos2.z, color, 0.0f, 1.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-				buffer.addVertex(pos1.x, pos1.y, pos1.z, color, 0.0f, 0.0f, overlayCoords, light, norm.x, norm.y, norm.z);
-			}
-		}
-		
+
+	public static void blit(GuiGraphics context, ResourceLocation location, float x, float y, float width, float height) {
+		RenderSystem.setShaderTexture(0, location);
+		RenderSystem.setShader(RenderUtils::getPositionTexTranslucentShader);
+		RenderSystem.enableBlend();
+		Matrix4f matrix4f = context.pose().last().pose();
+		BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+		bufferBuilder.addVertex(matrix4f, x        , y,          0).setUv(0, 0);
+		bufferBuilder.addVertex(matrix4f, x        , y + height, 0).setUv(0, 1);
+		bufferBuilder.addVertex(matrix4f, x + width, y + height, 0).setUv(1, 1);
+		bufferBuilder.addVertex(matrix4f, x + width, y,          0).setUv(1, 0);
+		BufferUploader.drawWithShader(bufferBuilder.build());
+		RenderSystem.disableBlend();
 	}
-	
-	public static void renderFramebuffer2D(GuiGraphicsExtractor context, WindowFramebuffer framebuffer, int x, int y, int w, int h) {
-		if(!framebuffer.isValid()) return;
-		context.blit(framebuffer.getTextureLocation(), x, y, x + w, y + h, 0.0f, 1.0f, 0.0f, 1.0f);
+
+	public static void renderFramebuffer(WindowFramebuffer framebuffer, PoseStack poseStack,
+			net.minecraft.client.renderer.MultiBufferSource buffers, boolean cutout,
+			Vec3 origin, Vec3 spanX, Vec3 spanY) {
+		if (framebuffer == null || !framebuffer.isValid()) return;
+		Vec3 tl = origin;
+		Vec3 bl = tl.add(spanY);
+		Vec3 br = bl.add(spanX);
+		Vec3 tr = tl.add(spanX);
+		Pose pose = poseStack.last();
+		BufferSource source = buffers instanceof BufferSource b ? b : Minecraft.getInstance().renderBuffers().bufferSource();
+		renderWindow(framebuffer, cutout, pose, tl, bl, br, tr,
+				new Vec2(0, 0), new Vec2(0, 1), new Vec2(1, 1), new Vec2(1, 0), source);
 	}
-	
-	public static void renderLineStrip(PoseStack poseStack, SubmitNodeCollector collector, Vec3[] points, int color, float width) {
-		collector.submitCustomGeometry(poseStack, RenderTypes.lines(), new LineStripDraw(points, color, width));
+
+	public static void renderFramebuffer2D(GuiGraphics context, WindowFramebuffer framebuffer,
+			int x, int y, int w, int h) {
+		if (framebuffer == null || !framebuffer.isValid()) return;
+		RenderSystem.setShaderTexture(0, framebuffer.getTexture());
+		RenderSystem.setShader(RenderUtils::getPositionTexTranslucentShader);
+		RenderSystem.enableBlend();
+		Matrix4f matrix = context.pose().last().pose();
+		BufferBuilder builder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+		builder.addVertex(matrix, x, y, 0).setUv(0, 1);
+		builder.addVertex(matrix, x, y + h, 0).setUv(0, 0);
+		builder.addVertex(matrix, x + w, y + h, 0).setUv(1, 0);
+		builder.addVertex(matrix, x + w, y, 0).setUv(1, 1);
+		BufferUploader.drawWithShader(builder.build());
+		RenderSystem.disableBlend();
 	}
-	
-	private static final record LineStripDraw(Vec3[] points, int color, float width) implements CustomGeometryRenderer {
-		
-		@Override
-		public void render(Pose pose, VertexConsumer buffer) {
-			for(int i = 1; i < points.length; i++) {
-				Vec3 start = points[i - 1];
-				Vec3 end = points[i];
-				Vector3f normal = end.subtract(start).toVector3f();
-				
-				buffer.addVertex(pose, start.toVector3f()).setColor(color).setNormal(pose, normal).setLineWidth(width);
-				buffer.addVertex(pose,   end.toVector3f()).setColor(color).setNormal(pose, normal).setLineWidth(width);
-			}
-		}
-		
-	}
-	
+
 }
